@@ -449,8 +449,20 @@ function wireWorldMap() {
   const doSearch = async () => {
     const query = el('worldmap-search-input').value.trim();
     if (!query) return;
-    const results = await window.kartograph.searchPlace(query);
-    worldMapView.showSearchResults(results);
+    const btn = el('worldmap-search-btn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      const results = await window.kartograph.searchPlace(query);
+      worldMapView.showSearchResults(results);
+      if (results.length === 0) toast(t('worldmap.noResults'), 'error');
+    } catch (err) {
+      toast(t('worldmap.searchFailed', { error: err.message }), 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
   };
   el('worldmap-search-btn').addEventListener('click', doSearch);
   el('worldmap-search-input').addEventListener('keydown', (e) => {
@@ -746,13 +758,16 @@ function wireStatusCoords() {
 // --- Bootstrap ---
 
 async function main() {
+  window.kartograph.reportSplashProgress(10, 'Oberfläche wird vorbereitet…');
   initTheme();
   applyI18n();
 
   mapState = new MapState();
   mapRenderer = new MapRenderer(el('canvas-mount'), mapState);
+  window.kartograph.reportSplashProgress(30, 'Kartencanvas wird initialisiert…');
   await mapRenderer.init();
   mapRenderer.app.ticker.add(updateScaleBar);
+  window.kartograph.reportSplashProgress(70, 'Werkzeuge werden geladen…');
 
   historyStack = new HistoryStack(onHistoryChange);
   toolManager = new ToolManager({
@@ -791,9 +806,13 @@ async function main() {
   // durch eine frische Instanz ersetzt (siehe loadProjectIntoState) – aktuell ist
   // immer nur toolManager.historyStack.
   window.__kartograph = { mapState, mapRenderer, toolManager, worldMapView, buildPrintPdf, computeScaleBar };
+
+  window.kartograph.reportSplashProgress(100, 'Fertig');
+  window.kartograph.rendererReady();
 }
 
 main().catch((err) => {
   console.error('Kartograph konnte nicht gestartet werden:', err);
   setStatus('Fehler beim Start – siehe Konsole.');
+  window.kartograph.rendererReady();
 });

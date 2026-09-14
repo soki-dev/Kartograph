@@ -28,5 +28,8 @@ contextBridge.exposeInMainWorld('kartograph', {
   onUpdateStatus: (cb) => on('update:status', cb),
 
   onCloseRequested: (cb) => on('app:closeRequested', cb),
-  confirmClose: () => ipcRenderer.send('app:confirmClose')
+  confirmClose: () => ipcRenderer.send('app:confirmClose'),
+
+  reportSplashProgress: (percent, text) => ipcRenderer.send('app:splashProgress', { percent, text }),
+  rendererReady: () => ipcRenderer.send('app:rendererReady')
 });

@@ -10,8 +10,28 @@ const { loadHeightmapImage } = require('./src/engine/heightmapImport');
 const { exportMapPng } = require('./src/engine/pngExport');
 
 let mainWindow;
+let splashWindow;
+let mainWindowFailSafeTimer;
 let recentProjects = [];
 let allowClose = false;
+
+const SEARCH_TIMEOUT_MS = 10000;
+
+// Wie in src/workers/importRealRegion.js: das Timeout muss auch das
+// Einlesen des Antwort-Bodys abdecken, nicht nur den Verbindungsaufbau,
+// sonst haengt eine Anfrage bei einem langsam streamenden Server trotzdem
+// unbegrenzt lange und die UI wirkt eingefroren ("nichts passiert").
+async function fetchJsonWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const RECENT_PROJECTS_PATH = path.join(app.getPath('userData'), 'recent-projects.json');
 
@@ -33,6 +53,46 @@ function pushRecentProject(filePath) {
   }
 }
 
+// Der App-Start (PixiJS-/WebGL-Initialisierung, Bundle laden) dauert
+// spuerbar 3-4s, in denen ohne Splash-Screen nur ein leeres Fenster steht.
+// Der Splash-Screen zeigt stattdessen sofort eine Ladeanimation mit echtem
+// Fortschritt (siehe renderer/app.js -> reportSplashProgress-Aufrufe).
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 420,
+    height: 260,
+    frame: false,
+    resizable: false,
+    movable: true,
+    show: true,
+    center: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: '#00000000',
+    transparent: true,
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, 'splash-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  splashWindow.loadFile(path.join(__dirname, 'renderer', 'splash.html'));
+}
+
+function showMainWindow() {
+  clearTimeout(mainWindowFailSafeTimer);
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+  }
+  splashWindow = null;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -41,6 +101,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#1b1d22',
     autoHideMenuBar: true,
+    show: false,
     icon: path.join(__dirname, 'assets', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -53,6 +114,11 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   Menu.setApplicationMenu(null);
 
+  // Falls der Renderer aus irgendeinem Grund nie "bereit" meldet (z. B. ein
+  // JS-Fehler vor dem entsprechenden Aufruf), Fenster trotzdem spaetestens
+  // nach 15s zeigen statt den Nutzer auf dem Splash-Screen haengen zu lassen.
+  mainWindowFailSafeTimer = setTimeout(showMainWindow, 15000);
+
   // Schließen (Klick auf "X", Alt+F4) erst nach Rückfrage im Renderer
   // zulassen, falls die Karte ungespeicherte Änderungen hat.
   mainWindow.on('close', (event) => {
@@ -62,8 +128,17 @@ function createWindow() {
   });
 }
 
+ipcMain.on('app:splashProgress', (_event, payload) => {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.webContents.send('splash:progress', payload);
+});
+
+ipcMain.on('app:rendererReady', () => {
+  showMainWindow();
+});
+
 app.whenReady().then(() => {
   loadRecentProjects();
+  createSplashWindow();
   createWindow();
 
   // Startet 3s nach dem Laden automatisch einen (stillen) Update-Check, damit
@@ -108,16 +183,23 @@ ipcMain.handle('terrain:generate', async (event, options) => {
 
 ipcMain.handle('geodata:searchPlace', async (_event, query) => {
   const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=8`;
-  const res = await fetch(url, { headers: { 'User-Agent': 'Kartograph/0.1 (Kartografie-Desktop-App)' } });
-  if (!res.ok) throw new Error(`Suche fehlgeschlagen: HTTP ${res.status}`);
-  const results = await res.json();
-  return results.map((r) => ({
-    displayName: r.display_name,
-    lat: parseFloat(r.lat),
-    lon: parseFloat(r.lon),
-    // Nominatim liefert [south, north, west, east] als Strings.
-    boundingBox: Array.isArray(r.boundingbox) ? r.boundingbox.map(Number) : null
-  }));
+  try {
+    const results = await fetchJsonWithTimeout(
+      url,
+      { headers: { 'User-Agent': 'Kartograph/0.2 (Kartografie-Desktop-App)', Accept: '*/*' } },
+      SEARCH_TIMEOUT_MS
+    );
+    return results.map((r) => ({
+      displayName: r.display_name,
+      lat: parseFloat(r.lat),
+      lon: parseFloat(r.lon),
+      // Nominatim liefert [south, north, west, east] als Strings.
+      boundingBox: Array.isArray(r.boundingbox) ? r.boundingbox.map(Number) : null
+    }));
+  } catch (err) {
+    const reason = err.name === 'AbortError' ? 'Zeitüberschreitung' : err.message;
+    throw new Error(`Ortssuche fehlgeschlagen: ${reason}`);
+  }
 });
 
 ipcMain.handle('geodata:importRegion', async (event, options) => {
