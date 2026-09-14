@@ -1,0 +1,71 @@
+{
+  "name": "kartograph",
+  "productName": "Kartograph",
+  "version": "0.1.0",
+  "description": "Kartografie-Werkzeug zum Erstellen professioneller Landschafts- und Stadtkarten (prozedural + manuell).",
+  "author": "Tino",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "build:renderer": "node scripts/build-renderer.js",
+    "start": "npm run build:renderer && electron .",
+    "watch": "node scripts/build-renderer.js --watch",
+    "pack": "npm run build:renderer && electron-builder --dir",
+    "dist": "npm run build:renderer && electron-builder",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "jszip": "^3.10.1",
+    "pixi.js": "^8.6.0",
+    "pngjs": "^7.0.0",
+    "simplex-noise": "^4.0.3"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.24.0"
+  },
+  "build": {
+    "appId": "com.kartograph.app",
+    "productName": "Kartograph",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "license": "build/installer-info.txt"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "soki-dev",
+      "repo": "Kartograph",
+      "releaseType": "draft"
+    }
+  },
+  "allowScripts": {
+    "electron@32.3.3": true,
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.24.2": true
+  }
+}

@@ -1,0 +1,33 @@
+Kartograph - Wichtige Informationen
+
+WAS IST KARTOGRAPH?
+Kartograph ist ein Kartografie-Werkzeug zum Erstellen professioneller
+Landschaftskarten: prozedurale Terrain-Generierung (Hoehen, Feuchtigkeit,
+Biome, Fluesse) kombiniert mit manuellen Zeichenwerkzeugen (Terrain-/Biom-
+Pinsel, Wasser-, Symbol- und Beschriftungs-Werkzeug). Es ist ein sich in
+aktiver Entwicklung befindlicher Prototyp; ein Stadtkarten-Generator und
+echter Geodaten-Import sind fuer spaetere Versionen geplant (siehe README
+auf GitHub).
+
+WELCHE DATEN VERARBEITET KARTOGRAPH?
+- Karten werden ausschliesslich LOKAL erzeugt und verarbeitet. Es werden
+  dabei standardmaessig KEINE Kartendaten, Bilder oder Projektdateien an
+  externe Server uebertragen.
+- Karten-Projekte (.kmap) und exportierte PNG-Dateien werden nur dort
+  gespeichert, wo du es beim Speichern/Exportieren explizit auswaehlst.
+- Der optionale Import eines Hoehenbilds liest ausschliesslich die von dir
+  ausgewaehlte Bilddatei lokal ein - nichts wird dabei hochgeladen.
+- Ein automatischer Update-Check kontaktiert beim Start bzw. auf Klick
+  kurz die GitHub-Releases-Seite dieses Projekts, um nach einer neueren
+  Version zu suchen. Dabei wird nichts automatisch heruntergeladen oder
+  installiert - das bleibt ein manueller Schritt.
+- Kartograph sendet keine Telemetrie, Nutzungsstatistiken oder Werbe-/
+  Tracking-Daten an den Entwickler.
+
+HINWEIS ZU WINDOWS SMARTSCREEN
+Dieser Installer ist nicht codesigniert - Windows SmartScreen zeigt beim
+ersten Ausfuehren ggf. eine Warnung ("Unbekannter Herausgeber"). Das ist
+bei unsignierten Prototyp-Builds normal und kein Hinweis auf Schadsoftware.
+
+Mit "Ich stimme zu" bestaetigst du, dass du diese Hinweise gelesen hast,
+und die Installation wird fortgesetzt.

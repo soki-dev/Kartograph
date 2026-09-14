@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' data: blob:;" />
+  <title>Kartograph</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar">
+      <div class="brand">
+        <img class="brand-mark" src="../assets/icon-64.png" alt="Kartograph" />
+        <span class="brand-name" data-i18n="app.title">Kartograph</span>
+      </div>
+      <div class="toolbar-actions">
+        <button id="btn-new" data-i18n="toolbar.new">Neue Karte</button>
+        <button id="btn-open" data-i18n="toolbar.open">Öffnen</button>
+        <select id="recent-select" aria-label="Zuletzt geöffnet"></select>
+        <button id="btn-save" data-i18n="toolbar.save">Speichern</button>
+        <button id="btn-save-as" data-i18n="toolbar.saveAs">Speichern unter</button>
+        <button id="btn-export-png" data-i18n="toolbar.exportPng">Als PNG exportieren</button>
+        <span class="toolbar-spacer"></span>
+        <button id="btn-undo" title="Undo">↶</button>
+        <button id="btn-redo" title="Redo">↷</button>
+        <select id="locale-select" aria-label="Sprache">
+          <option value="de">DE</option>
+          <option value="en">EN</option>
+        </select>
+        <select id="theme-select" aria-label="Theme">
+          <option value="system">Auto</option>
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+        <button id="btn-check-update" title="Nach Updates suchen" data-i18n="toolbar.checkUpdate">Updates</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <nav class="tools-sidebar" id="tools-sidebar">
+        <button class="tool-btn" data-tool="terrainBrush"><span class="tool-icon">⛰</span><span data-i18n="tools.terrainBrush"></span></button>
+        <button class="tool-btn" data-tool="biomeBrush"><span class="tool-icon">🎨</span><span data-i18n="tools.biomeBrush"></span></button>
+        <button class="tool-btn" data-tool="waterTool"><span class="tool-icon">〰</span><span data-i18n="tools.waterTool"></span></button>
+        <button class="tool-btn" data-tool="symbolTool"><span class="tool-icon">📍</span><span data-i18n="tools.symbolTool"></span></button>
+        <button class="tool-btn" data-tool="labelTool"><span class="tool-icon">🔤</span><span data-i18n="tools.labelTool"></span></button>
+        <button class="tool-btn" data-tool="eraser"><span class="tool-icon">🧹</span><span data-i18n="tools.eraser"></span></button>
+      </nav>
+
+      <main class="canvas-area" id="canvas-mount">
+        <div class="canvas-placeholder" id="canvas-placeholder" data-i18n="status.noMap"></div>
+      </main>
+
+      <aside class="right-panel">
+        <section class="panel">
+          <h3 data-i18n="panel.toolOptions"></h3>
+          <div id="tool-options"></div>
+        </section>
+        <section class="panel">
+          <h3 data-i18n="panel.layers"></h3>
+          <ul id="layers-list" class="layers-list"></ul>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="status-bar">
+      <span id="status-text" data-i18n="status.noMap"></span>
+      <span class="status-spacer"></span>
+      <span id="status-coords"></span>
+      <span id="status-seed"></span>
+    </footer>
+
+    <div id="new-map-dialog" class="modal-overlay" hidden>
+      <div class="modal">
+        <h2 data-i18n="dialog.newMap.title"></h2>
+
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.width"></label>
+          <input type="number" id="nm-width" value="512" min="64" max="2048" step="64" />
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.height"></label>
+          <input type="number" id="nm-height" value="512" min="64" max="2048" step="64" />
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.seed"></label>
+          <div class="seed-row">
+            <input type="text" id="nm-seed" value="" />
+            <button id="nm-random-seed" data-i18n="dialog.newMap.randomSeed"></button>
+          </div>
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.mode"></label>
+          <select id="nm-mode">
+            <option value="generated" data-i18n="dialog.newMap.mode.generate"></option>
+            <option value="imported-heightmap" data-i18n="dialog.newMap.mode.import"></option>
+          </select>
+        </div>
+        <div class="field-row" id="nm-import-row" hidden>
+          <button id="nm-pick-image" data-i18n="dialog.newMap.pickImage"></button>
+          <span id="nm-import-status"></span>
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.seaLevel"></label>
+          <input type="range" id="nm-sea-level" min="0.1" max="0.7" step="0.01" value="0.4" />
+        </div>
+
+        <div id="nm-progress" class="progress-bar" hidden><div class="progress-fill"></div></div>
+
+        <div class="modal-actions">
+          <button id="nm-cancel" data-i18n="dialog.newMap.cancel"></button>
+          <button id="nm-generate" class="primary" data-i18n="dialog.newMap.generate"></button>
+        </div>
+      </div>
+    </div>
+    <div id="text-prompt-dialog" class="modal-overlay" hidden>
+      <div class="modal">
+        <h2 id="text-prompt-title">Beschriftungstext</h2>
+        <div class="field-row">
+          <input type="text" id="text-prompt-input" />
+        </div>
+        <div class="modal-actions">
+          <button id="text-prompt-cancel" data-i18n="dialog.newMap.cancel"></button>
+          <button id="text-prompt-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  </div>
+
+  <script src="dist/app.bundle.js"></script>
+</body>
+</html>
