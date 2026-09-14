@@ -13,13 +13,20 @@ contextBridge.exposeInMainWorld('kartograph', {
 
   pickHeightmapImage: () => ipcRenderer.invoke('heightmap:pickImage'),
 
+  searchPlace: (query) => ipcRenderer.invoke('geodata:searchPlace', query),
+  importRegion: (options) => ipcRenderer.invoke('geodata:importRegion', options),
+
   saveProject: (filePath, project) => ipcRenderer.invoke('project:save', { filePath, project }),
   openProject: () => ipcRenderer.invoke('project:open'),
   openProjectPath: (filePath) => ipcRenderer.invoke('project:openPath', filePath),
   listRecentProjects: () => ipcRenderer.invoke('project:listRecent'),
 
   exportPng: (pngBuffer, suggestedName) => ipcRenderer.invoke('export:png', { pngBuffer, suggestedName }),
+  exportPdf: (pdfBuffer, suggestedName) => ipcRenderer.invoke('export:pdf', { pdfBuffer, suggestedName }),
 
   checkForUpdate: () => ipcRenderer.invoke('update:check'),
-  onUpdateStatus: (cb) => on('update:status', cb)
+  onUpdateStatus: (cb) => on('update:status', cb),
+
+  onCloseRequested: (cb) => on('app:closeRequested', cb),
+  confirmClose: () => ipcRenderer.send('app:confirmClose')
 });

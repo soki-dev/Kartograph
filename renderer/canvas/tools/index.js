@@ -49,14 +49,16 @@ function circleCells(mapState, cx, cy, radius) {
  * um eine gemeinsame Basisklasse zu rechtfertigen.
  */
 export class ToolManager {
-  constructor({ mapState, mapRenderer, historyStack, promptText }) {
+  constructor({ mapState, mapRenderer, historyStack, promptText, promptRegion, onMeasure }) {
     this.mapState = mapState;
     this.mapRenderer = mapRenderer;
     this.historyStack = historyStack;
     // Electron unterstützt window.prompt() nicht ("is and will not be
-    // supported") – die Beschriftungs-Eingabe kommt daher von außen (ein
-    // eigener HTML-Dialog in app.js), damit dieses Modul UI-agnostisch bleibt.
+    // supported") – die Beschriftungs-/Regions-Eingabe kommt daher von außen
+    // (ein eigener HTML-Dialog in app.js), damit dieses Modul UI-agnostisch bleibt.
     this.promptText = promptText || (async () => null);
+    this.promptRegion = promptRegion || (async () => null);
+    this.onMeasure = onMeasure || (() => {});
     this.activeTool = 'terrainBrush';
     this.options = {
       brushRadius: 8,
@@ -66,12 +68,26 @@ export class ToolManager {
     };
     this._session = null;
     this._waterPath = null;
+    this._roadPath = null;
+    this._regionPoints = null;
+    this._rulerStart = null;
   }
 
   setActiveTool(tool) {
     this.activeTool = tool;
     this._session = null;
     this._waterPath = null;
+    this._roadPath = null;
+    this._regionPoints = null;
+    this._rulerStart = null;
+    this.mapRenderer.clearOverlay();
+  }
+
+  // Bricht ein mehrschrittiges Werkzeug (Region zeichnen) ab, z. B. bei Escape.
+  cancelActiveDrawing() {
+    this._regionPoints = null;
+    this._rulerStart = null;
+    this.mapRenderer.clearOverlay();
   }
 
   setOption(key, value) {
@@ -86,6 +102,12 @@ export class ToolManager {
         return this._handleBiomeBrush(mx, my, phase);
       case 'waterTool':
         return this._handleWaterTool(mx, my, phase);
+      case 'roadTool':
+        return this._handleRoadTool(mx, my, phase);
+      case 'regionTool':
+        return this._handleRegionTool(mx, my, phase);
+      case 'rulerTool':
+        return this._handleRulerTool(mx, my, phase);
       case 'symbolTool':
         return this._handleSymbolTool(mx, my, phase);
       case 'labelTool':
@@ -172,6 +194,93 @@ export class ToolManager {
     this.mapRenderer.redrawRivers();
   }
 
+  // --- Straßen-Werkzeug: manuelle Straße zeichnen (wie Wasser, andere Ebene/Optik) ---
+  _handleRoadTool(mx, my, phase) {
+    const point = [Math.round(mx), Math.round(my)];
+    if (phase === 'start') {
+      this._roadPath = [point];
+    } else if (phase === 'move' && this._roadPath) {
+      const last = this._roadPath[this._roadPath.length - 1];
+      if (Math.hypot(point[0] - last[0], point[1] - last[1]) >= 1.5) this._roadPath.push(point);
+    } else if (phase === 'end' && this._roadPath) {
+      if (this._roadPath.length > 1) {
+        const road = { points: this._roadPath, source: 'user' };
+        this.mapState.roads.push(road);
+        this.historyStack.push({
+          do: () => {
+            if (!this.mapState.roads.includes(road)) this.mapState.roads.push(road);
+          },
+          undo: () => {
+            this.mapState.roads = this.mapState.roads.filter((r) => r !== road);
+          }
+        });
+      }
+      this._roadPath = null;
+    }
+    this.mapRenderer.redrawRoads();
+  }
+
+  // --- Grenzen-Werkzeug: Klick für Eckpunkte, Klick nahe am Startpunkt schließt das Polygon ---
+  _handleRegionTool(mx, my, phase) {
+    if (phase !== 'start') return;
+    const point = [Math.round(mx), Math.round(my)];
+    if (!this._regionPoints) this._regionPoints = [];
+
+    if (this._regionPoints.length >= 3) {
+      const [fx, fy] = this._regionPoints[0];
+      const closeThreshold = Math.max(4, 10 / this.mapRenderer.world.scale.x);
+      if (Math.hypot(point[0] - fx, point[1] - fy) <= closeThreshold) {
+        this._finishRegion();
+        return;
+      }
+    }
+
+    this._regionPoints.push(point);
+    this.mapRenderer.redrawRegionPreview(this._regionPoints);
+  }
+
+  async _finishRegion() {
+    const points = this._regionPoints;
+    this._regionPoints = null;
+    this.mapRenderer.clearOverlay();
+
+    const result = await this.promptRegion();
+    if (!result) return;
+
+    const region = { id: `reg-${Date.now().toString(36)}`, name: result.name, color: result.color, points };
+    this.mapState.regions.push(region);
+    this.historyStack.push({
+      do: () => {
+        if (!this.mapState.regions.includes(region)) this.mapState.regions.push(region);
+      },
+      undo: () => {
+        this.mapState.regions = this.mapState.regions.filter((r) => r !== region);
+      }
+    });
+    this.mapRenderer.redrawRegions();
+  }
+
+  // --- Lineal: Distanz zwischen zwei Punkten in realen Einheiten anzeigen ---
+  _handleRulerTool(mx, my, phase) {
+    const point = [mx, my];
+    if (phase === 'start') {
+      this._rulerStart = point;
+    } else if (phase === 'move' && this._rulerStart) {
+      this.mapRenderer.redrawRulerPreview(this._rulerStart, point);
+      this._reportRulerDistance(this._rulerStart, point);
+    } else if (phase === 'end' && this._rulerStart) {
+      this.mapRenderer.redrawRulerPreview(this._rulerStart, point);
+      this._reportRulerDistance(this._rulerStart, point);
+      this._rulerStart = null;
+    }
+  }
+
+  _reportRulerDistance(a, b) {
+    const cellDistance = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const meters = cellDistance * (this.mapState.scale?.metersPerCell || 1000);
+    this.onMeasure(formatDistance(meters));
+  }
+
   // --- Symbol-Stempel: Icon platzieren ---
   _handleSymbolTool(mx, my, phase) {
     if (phase !== 'start') return;
@@ -223,6 +332,14 @@ export class ToolManager {
       path.some(([px, py]) => Math.hypot(px - mx, py - my) <= radius)
     );
 
+    const nearRoad = this.mapState.roads.find((road) =>
+      road.points.some(([px, py]) => Math.hypot(px - mx, py - my) <= radius)
+    );
+
+    const nearRegion = this.mapState.regions.find((region) =>
+      region.points.some(([px, py]) => Math.hypot(px - mx, py - my) <= radius)
+    );
+
     if (nearSymbol) {
       const symbol = nearSymbol.s;
       this.mapState.symbols = this.mapState.symbols.filter((s) => s !== symbol);
@@ -252,8 +369,31 @@ export class ToolManager {
         undo: () => this.mapState.rivers.push(nearRiver)
       });
       this.mapRenderer.redrawRivers();
+    } else if (nearRoad) {
+      this.mapState.roads = this.mapState.roads.filter((r) => r !== nearRoad);
+      this.historyStack.push({
+        do: () => {
+          this.mapState.roads = this.mapState.roads.filter((r) => r !== nearRoad);
+        },
+        undo: () => this.mapState.roads.push(nearRoad)
+      });
+      this.mapRenderer.redrawRoads();
+    } else if (nearRegion) {
+      this.mapState.regions = this.mapState.regions.filter((r) => r !== nearRegion);
+      this.historyStack.push({
+        do: () => {
+          this.mapState.regions = this.mapState.regions.filter((r) => r !== nearRegion);
+        },
+        undo: () => this.mapState.regions.push(nearRegion)
+      });
+      this.mapRenderer.redrawRegions();
     }
   }
+}
+
+function formatDistance(meters) {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(meters >= 10000 ? 0 : 1)} km`;
+  return `${Math.round(meters)} m`;
 }
 
 function averageNeighbors(mapState, x, y) {

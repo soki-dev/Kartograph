@@ -22,6 +22,11 @@ async function saveProject(filePath, project) {
     stylePreset: project.stylePreset,
     layers: project.layers || [],
     rivers: project.rivers || [],
+    roads: project.roads || [],
+    buildings: project.buildings || [],
+    places: project.places || [],
+    regions: project.regions || [],
+    scale: project.scale || null,
     symbols: project.symbols || [],
     labels: project.labels || []
   };

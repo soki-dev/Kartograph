@@ -1,8 +1,8 @@
 {
   "name": "kartograph",
   "productName": "Kartograph",
-  "version": "0.1.0",
-  "description": "Kartografie-Werkzeug zum Erstellen professioneller Landschafts- und Stadtkarten (prozedural + manuell).",
+  "version": "0.2.0",
+  "description": "Kartografie-Werkzeug zum Erstellen professioneller Landschafts- und Stadtkarten (prozedural, manuell und aus echten Geodaten).",
   "author": "Tino",
   "main": "main.js",
   "private": true,
@@ -17,6 +17,8 @@
   "dependencies": {
     "electron-updater": "^6.8.9",
     "jszip": "^3.10.1",
+    "leaflet": "^1.9.4",
+    "pdf-lib": "^1.17.1",
     "pixi.js": "^8.6.0",
     "pngjs": "^7.0.0",
     "simplex-noise": "^4.0.3"

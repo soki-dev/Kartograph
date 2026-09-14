@@ -2,15 +2,33 @@ import { BIOME_BY_KEY } from '../../src/engine/biomeClassifier.js';
 
 const DEFAULT_LAYERS = [
   { key: 'terrain', visible: true, opacity: 1 },
+  { key: 'regions', visible: true, opacity: 1 },
   { key: 'water', visible: true, opacity: 1 },
+  { key: 'roads', visible: true, opacity: 1 },
+  { key: 'buildings', visible: true, opacity: 1 },
   { key: 'symbols', visible: true, opacity: 1 },
-  { key: 'labels', visible: true, opacity: 1 },
-  { key: 'grid', visible: false, opacity: 0.5 }
+  { key: 'places', visible: true, opacity: 1 },
+  { key: 'grid', visible: false, opacity: 0.5 },
+  { key: 'labels', visible: true, opacity: 1 }
 ];
+
+const DEFAULT_METERS_PER_CELL = 1000;
 
 let nextEntityId = 1;
 function makeId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${(nextEntityId++).toString(36)}`;
+}
+
+// Fügt beim Laden älterer .kmap-Dateien (z. B. v0.1.0, vor Straßen/Gebäude/
+// Orte/Regionen) die inzwischen dazugekommenen Layer-Einträge mit ihren
+// Defaults hinzu, statt sie in der Ebenen-Liste stillschweigend zu verlieren.
+function mergeLayers(savedLayers) {
+  const merged = savedLayers.map((l) => ({ ...l }));
+  const knownKeys = new Set(merged.map((l) => l.key));
+  for (const defaultLayer of DEFAULT_LAYERS) {
+    if (!knownKeys.has(defaultLayer.key)) merged.push({ ...defaultLayer });
+  }
+  return merged;
 }
 
 /**
@@ -38,9 +56,14 @@ export class MapState {
       ? Uint8Array.from(project.biomes)
       : new Uint8Array(this.width * this.height).fill(BIOME_BY_KEY.ocean.id);
     this.rivers = project.rivers ? project.rivers.map((r) => r.map((p) => [...p])) : [];
+    this.roads = project.roads ? project.roads.map((r) => ({ ...r, points: r.points.map((p) => [...p]) })) : [];
+    this.buildings = project.buildings ? project.buildings.map((b) => ({ points: b.points.map((p) => [...p]) })) : [];
+    this.places = project.places ? project.places.map((p) => ({ ...p })) : [];
+    this.regions = project.regions ? project.regions.map((r) => ({ ...r, points: r.points.map((p) => [...p]) })) : [];
+    this.scale = project.scale ? { ...project.scale } : { metersPerCell: DEFAULT_METERS_PER_CELL };
     this.symbols = project.symbols ? project.symbols.map((s) => ({ ...s })) : [];
     this.labels = project.labels ? project.labels.map((l) => ({ ...l })) : [];
-    this.layers = project.layers ? project.layers.map((l) => ({ ...l })) : DEFAULT_LAYERS.map((l) => ({ ...l }));
+    this.layers = project.layers ? mergeLayers(project.layers) : DEFAULT_LAYERS.map((l) => ({ ...l }));
     this.dirty = false;
     this.emit('reset');
   }
@@ -57,6 +80,11 @@ export class MapState {
       moisture: this.moisture ? Array.from(this.moisture) : null,
       biomes: Array.from(this.biomes),
       rivers: this.rivers,
+      roads: this.roads,
+      buildings: this.buildings,
+      places: this.places,
+      regions: this.regions,
+      scale: this.scale,
       symbols: this.symbols,
       labels: this.labels,
       layers: this.layers

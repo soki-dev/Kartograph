@@ -11,6 +11,7 @@ const { exportMapPng } = require('./src/engine/pngExport');
 
 let mainWindow;
 let recentProjects = [];
+let allowClose = false;
 
 const RECENT_PROJECTS_PATH = path.join(app.getPath('userData'), 'recent-projects.json');
 
@@ -51,6 +52,14 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   Menu.setApplicationMenu(null);
+
+  // Schließen (Klick auf "X", Alt+F4) erst nach Rückfrage im Renderer
+  // zulassen, falls die Karte ungespeicherte Änderungen hat.
+  mainWindow.on('close', (event) => {
+    if (allowClose) return;
+    event.preventDefault();
+    mainWindow.webContents.send('app:closeRequested');
+  });
 }
 
 app.whenReady().then(() => {
@@ -85,6 +94,46 @@ ipcMain.handle('terrain:generate', async (event, options) => {
         event.sender.send('terrain:progress', msg.payload);
       } else if (msg.type === 'done') {
         resolve(msg.payload);
+        worker.terminate();
+      }
+    });
+    worker.on('error', (err) => {
+      reject(err);
+      worker.terminate();
+    });
+  });
+});
+
+// --- Weltkarte: Ortssuche & echter Regions-Import (Worker-Thread) ---
+
+ipcMain.handle('geodata:searchPlace', async (_event, query) => {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=8`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Kartograph/0.1 (Kartografie-Desktop-App)' } });
+  if (!res.ok) throw new Error(`Suche fehlgeschlagen: HTTP ${res.status}`);
+  const results = await res.json();
+  return results.map((r) => ({
+    displayName: r.display_name,
+    lat: parseFloat(r.lat),
+    lon: parseFloat(r.lon),
+    // Nominatim liefert [south, north, west, east] als Strings.
+    boundingBox: Array.isArray(r.boundingbox) ? r.boundingbox.map(Number) : null
+  }));
+});
+
+ipcMain.handle('geodata:importRegion', async (event, options) => {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'src', 'workers', 'importRealRegion.js'), {
+      workerData: options
+    });
+
+    worker.on('message', (msg) => {
+      if (msg.type === 'progress') {
+        event.sender.send('terrain:progress', msg.payload);
+      } else if (msg.type === 'done') {
+        resolve(msg.payload);
+        worker.terminate();
+      } else if (msg.type === 'error') {
+        reject(new Error(msg.payload.message));
         worker.terminate();
       }
     });
@@ -156,6 +205,13 @@ ipcMain.handle('project:openPath', async (_event, filePath) => {
 
 ipcMain.handle('project:listRecent', () => recentProjects);
 
+// --- Fenster schließen (nach Rückfrage im Renderer, siehe createWindow) ---
+
+ipcMain.on('app:confirmClose', () => {
+  allowClose = true;
+  if (mainWindow) mainWindow.close();
+});
+
 // --- Export ---
 
 ipcMain.handle('export:png', async (_event, { pngBuffer, suggestedName }) => {
@@ -166,6 +222,17 @@ ipcMain.handle('export:png', async (_event, { pngBuffer, suggestedName }) => {
   });
   if (result.canceled || !result.filePath) return { canceled: true };
   await exportMapPng(result.filePath, pngBuffer);
+  return { canceled: false, filePath: result.filePath };
+});
+
+ipcMain.handle('export:pdf', async (_event, { pdfBuffer, suggestedName }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Karte als PDF exportieren',
+    defaultPath: suggestedName || 'Karte.pdf',
+    filters: [{ name: 'PDF-Dokument', extensions: ['pdf'] }]
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.promises.writeFile(result.filePath, Buffer.from(pdfBuffer));
   return { canceled: false, filePath: result.filePath };
 });
 

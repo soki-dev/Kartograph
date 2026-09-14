@@ -3,8 +3,11 @@ import { MapState } from './state/MapState.js';
 import { ToolManager } from './canvas/tools/index.js';
 import { HistoryStack } from './canvas/historyStack.js';
 import { BIOMES } from '../src/engine/biomeClassifier.js';
+import { haversineDistance } from '../src/engine/geodata/projection.js';
 import { initTheme, setTheme, getTheme } from './theme.js';
 import { applyI18n, setLocale, getLocale, t } from './i18n.js';
+import { WorldMapView } from './worldmap/WorldMapView.js';
+import { buildPrintPdf } from './print/buildPrintPdf.js';
 
 const TOOLS = ['terrainBrush', 'biomeBrush', 'waterTool', 'symbolTool', 'labelTool', 'eraser'];
 const SYMBOL_TYPES = ['mountain', 'hill', 'forest', 'city', 'compass'];
@@ -13,6 +16,7 @@ let mapState;
 let mapRenderer;
 let historyStack;
 let toolManager;
+let worldMapView;
 let currentFilePath = null;
 let pickedHeightmap = null;
 let hasMap = false;
@@ -36,8 +40,35 @@ function setStatus(text) {
   el('status-text').textContent = text;
 }
 
+// Findet zu einer rohen Meterzahl den nächsten "runden" Wert (1/2/5 × 10^n),
+// wie es klassische Kartenmaßstabsbalken tun, statt krummer Zahlen.
+function computeScaleBar(metersPerPixel, targetPixelWidth = 90) {
+  const rawMeters = metersPerPixel * targetPixelWidth;
+  if (!Number.isFinite(rawMeters) || rawMeters <= 0) return null;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawMeters)));
+  const residual = rawMeters / magnitude;
+  const niceResidual = residual < 1.5 ? 1 : residual < 3.5 ? 2 : residual < 7.5 ? 5 : 10;
+  const niceMeters = niceResidual * magnitude;
+  const pixels = niceMeters / metersPerPixel;
+  const label = niceMeters >= 1000 ? `${niceMeters / 1000} km` : `${Math.round(niceMeters)} m`;
+  return { pixels, label };
+}
+
+function updateScaleBar() {
+  if (!hasMap) return;
+  const metersPerPixel = mapState.scale.metersPerCell / mapRenderer.world.scale.x;
+  const bar = computeScaleBar(metersPerPixel);
+  if (!bar) return;
+  el('scale-bar').querySelector('.scale-bar-line').style.width = `${bar.pixels}px`;
+  el('scale-bar-label').textContent = bar.label;
+}
+
 function refreshWindowTitle() {
-  const name = currentFilePath ? currentFilePath.split(/[\\/]/).pop() : t('status.noMap');
+  if (!hasMap) {
+    document.title = `${t('app.title')} — ${t('status.noMap')}`;
+    return;
+  }
+  const name = currentFilePath ? currentFilePath.split(/[\\/]/).pop() : t('status.untitled');
   document.title = `${t('app.title')} — ${name}${mapState.dirty ? ' *' : ''}`;
 }
 
@@ -203,6 +234,10 @@ function wireToolSidebar() {
   });
   setActiveToolButton(toolManager.activeTool);
   renderToolOptions(toolManager.activeTool);
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') toolManager.cancelActiveDrawing();
+  });
 }
 
 // --- Undo/Redo ---
@@ -255,6 +290,7 @@ function loadProjectIntoState(project) {
   mapRenderer.redrawAll();
   hasMap = true;
   el('canvas-placeholder').hidden = true;
+  el('scale-bar').hidden = false;
   renderLayersList();
   refreshHistoryButtons();
   el('status-seed').textContent = `Seed: ${mapState.seed}`;
@@ -293,6 +329,172 @@ function showTextPrompt(title) {
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);
     input.addEventListener('keydown', onKeydown);
+  });
+}
+
+// --- Regions-Dialog (Name + Farbe für politische Grenzen) ---
+
+const REGION_COLORS = ['#aa3355', '#3f7ea6', '#4a8f5c', '#c98a2b', '#7a5aa6', '#b5533c', '#4a4a5c', '#2f8f8a'];
+
+function showRegionPromptDialog() {
+  return new Promise((resolve) => {
+    const dialog = el('region-prompt-dialog');
+    const input = el('region-prompt-input');
+    const colorsContainer = el('region-prompt-colors');
+    input.value = '';
+    colorsContainer.innerHTML = '';
+
+    let selectedColor = REGION_COLORS[0];
+    const swatches = REGION_COLORS.map((color) => {
+      const swatch = document.createElement('div');
+      swatch.className = 'color-swatch';
+      swatch.style.background = color;
+      swatch.classList.toggle('selected', color === selectedColor);
+      swatch.addEventListener('click', () => {
+        selectedColor = color;
+        swatches.forEach((s) => s.classList.toggle('selected', s === swatch));
+      });
+      colorsContainer.appendChild(swatch);
+      return swatch;
+    });
+
+    dialog.hidden = false;
+    input.focus();
+
+    const cleanup = (result) => {
+      dialog.hidden = true;
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+      resolve(result);
+    };
+    const onOk = () => {
+      const name = input.value.trim();
+      cleanup(name ? { name, color: selectedColor } : null);
+    };
+    const onCancel = () => cleanup(null);
+    const onKeydown = (e) => {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    };
+
+    const okBtn = el('region-prompt-ok');
+    const cancelBtn = el('region-prompt-cancel');
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
+}
+
+// --- Schließen-Bestätigung (ungespeicherte Änderungen) ---
+
+function showCloseConfirmDialog() {
+  return new Promise((resolve) => {
+    const dialog = el('close-confirm-dialog');
+    dialog.hidden = false;
+
+    const saveBtn = el('close-confirm-save');
+    const discardBtn = el('close-confirm-discard');
+    const cancelBtn = el('close-confirm-cancel');
+
+    const cleanup = (result) => {
+      dialog.hidden = true;
+      saveBtn.removeEventListener('click', onSave);
+      discardBtn.removeEventListener('click', onDiscard);
+      cancelBtn.removeEventListener('click', onCancel);
+      window.removeEventListener('keydown', onKeydown);
+      resolve(result);
+    };
+    const onSave = () => cleanup('save');
+    const onDiscard = () => cleanup('discard');
+    const onCancel = () => cleanup('cancel');
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') onCancel();
+    };
+
+    saveBtn.addEventListener('click', onSave);
+    discardBtn.addEventListener('click', onDiscard);
+    cancelBtn.addEventListener('click', onCancel);
+    window.addEventListener('keydown', onKeydown);
+  });
+}
+
+function wireCloseConfirmation() {
+  window.kartograph.onCloseRequested(async () => {
+    if (!hasMap || !mapState.dirty) {
+      window.kartograph.confirmClose();
+      return;
+    }
+
+    const choice = await showCloseConfirmDialog();
+    if (choice === 'cancel') return;
+    if (choice === 'save') {
+      const saved = await saveMap(false);
+      if (!saved) return; // Speichern-Dialog wurde abgebrochen -> Fenster bleibt offen
+    }
+    window.kartograph.confirmClose();
+  });
+}
+
+// --- Weltkarte: Ortssuche & echter Regions-Import ---
+
+function wireWorldMap() {
+  worldMapView = new WorldMapView({
+    onWarnLargeRegion: () => toast(t('worldmap.largeRegion'), 'error')
+  });
+
+  el('btn-worldmap').addEventListener('click', () => worldMapView.open());
+  el('worldmap-close-btn').addEventListener('click', () => worldMapView.close());
+
+  const doSearch = async () => {
+    const query = el('worldmap-search-input').value.trim();
+    if (!query) return;
+    const results = await window.kartograph.searchPlace(query);
+    worldMapView.showSearchResults(results);
+  };
+  el('worldmap-search-btn').addEventListener('click', doSearch);
+  el('worldmap-search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doSearch();
+  });
+
+  el('worldmap-import-btn').addEventListener('click', async () => {
+    const bounds = worldMapView.getSelectionBounds();
+    if (!bounds) return;
+
+    const north = bounds.getNorth();
+    const south = bounds.getSouth();
+    const east = bounds.getEast();
+    const west = bounds.getWest();
+    const latMid = (north + south) / 2;
+    const widthMeters = haversineDistance(latMid, west, latMid, east);
+    const heightMeters = haversineDistance(north, west, south, west);
+
+    const width = Number(el('worldmap-width').value);
+    const height = Math.min(2048, Math.max(64, Math.round(width * (heightMeters / widthMeters))));
+
+    const progress = el('worldmap-progress');
+    const progressFill = progress.querySelector('.progress-fill');
+    progress.hidden = false;
+    progressFill.style.width = '0%';
+    el('worldmap-import-btn').disabled = true;
+
+    const unsubscribe = window.kartograph.onTerrainProgress(({ percent }) => {
+      progressFill.style.width = `${percent}%`;
+    });
+
+    try {
+      const payload = await window.kartograph.importRegion({ bounds: { north, south, east, west }, width, height });
+      currentFilePath = null;
+      loadProjectIntoState({ ...payload, mode: 'imported-real-region', stylePreset: 'realistic' });
+      worldMapView.clearSelection();
+      worldMapView.close();
+    } catch (err) {
+      toast(t('worldmap.importFailed', { error: err.message }), 'error');
+    } finally {
+      unsubscribe();
+      progress.hidden = true;
+      el('worldmap-import-btn').disabled = false;
+    }
   });
 }
 
@@ -364,7 +566,8 @@ function wireNewMapDialog() {
       loadProjectIntoState({
         ...payload,
         mode,
-        stylePreset: 'fantasy'
+        stylePreset: 'fantasy',
+        scale: { metersPerCell: Number(el('nm-meters-per-cell').value) || 1000 }
       });
       dialog.hidden = true;
     } finally {
@@ -378,14 +581,15 @@ function wireNewMapDialog() {
 // --- Speichern / Öffnen / Export ---
 
 async function saveMap(forceDialog) {
-  if (!hasMap) return;
+  if (!hasMap) return false;
   const result = await window.kartograph.saveProject(forceDialog ? null : currentFilePath, mapState.toProjectObject());
-  if (result.canceled) return;
+  if (result.canceled) return false;
   currentFilePath = result.filePath;
   mapState.dirty = false;
   setStatus(t('status.saved'));
   refreshWindowTitle();
   refreshRecentProjects();
+  return true;
 }
 
 async function openMap() {
@@ -411,6 +615,46 @@ async function exportPng() {
   if (!result.canceled) setStatus(t('status.exported'));
 }
 
+function wirePrintDialog() {
+  const dialog = el('print-dialog');
+
+  el('btn-export-pdf').addEventListener('click', () => {
+    if (!hasMap) return;
+    el('print-title').value = currentFilePath ? currentFilePath.split(/[\\/]/).pop().replace(/\.kmap$/i, '') : t('status.untitled');
+    dialog.hidden = false;
+  });
+  el('print-cancel').addEventListener('click', () => {
+    dialog.hidden = true;
+  });
+
+  el('print-export').addEventListener('click', async () => {
+    const btn = el('print-export');
+    btn.disabled = true;
+    try {
+      const pngBuffer = await mapRenderer.exportPngBuffer(2);
+      const pdfBytes = await buildPrintPdf({
+        pngBuffer,
+        title: el('print-title').value.trim(),
+        pageSize: el('print-page-size').value,
+        orientation: el('print-orientation').value,
+        includeLegend: el('print-include-legend').checked,
+        mapState,
+        locale: getLocale()
+      });
+      const suggestedName = (el('print-title').value.trim() || 'Karte') + '.pdf';
+      const result = await window.kartograph.exportPdf(pdfBytes, suggestedName);
+      if (!result.canceled) {
+        setStatus(t('status.exportedPdf'));
+        dialog.hidden = true;
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 async function refreshRecentProjects() {
   const recent = await window.kartograph.listRecentProjects();
   const select = el('recent-select');
@@ -433,13 +677,6 @@ function wireToolbar() {
   el('btn-save').addEventListener('click', () => saveMap(false));
   el('btn-save-as').addEventListener('click', () => saveMap(true));
   el('btn-export-png').addEventListener('click', exportPng);
-
-  window.addEventListener('beforeunload', (e) => {
-    if (mapState.dirty) {
-      e.preventDefault();
-      e.returnValue = '';
-    }
-  });
 }
 
 // --- Sprache & Theme ---
@@ -515,9 +752,19 @@ async function main() {
   mapState = new MapState();
   mapRenderer = new MapRenderer(el('canvas-mount'), mapState);
   await mapRenderer.init();
+  mapRenderer.app.ticker.add(updateScaleBar);
 
   historyStack = new HistoryStack(onHistoryChange);
-  toolManager = new ToolManager({ mapState, mapRenderer, historyStack, promptText: showTextPrompt });
+  toolManager = new ToolManager({
+    mapState,
+    mapRenderer,
+    historyStack,
+    promptText: showTextPrompt,
+    promptRegion: showRegionPromptDialog,
+    onMeasure: (distance) => {
+      el('status-measure').textContent = t('status.rulerResult', { distance });
+    }
+  });
 
   mapRenderer.setPointerHandler((mx, my, phase) => {
     if (!hasMap) return;
@@ -528,8 +775,11 @@ async function main() {
   wireUndoRedo();
   wireNewMapDialog();
   wireToolbar();
+  wirePrintDialog();
   wireLocaleAndTheme();
   wireUpdates();
+  wireCloseConfirmation();
+  wireWorldMap();
   wireStatusCoords();
   refreshRecentProjects();
 
@@ -540,7 +790,7 @@ async function main() {
   // historyStack bewusst NICHT direkt referenziert: es wird bei jeder neuen Karte
   // durch eine frische Instanz ersetzt (siehe loadProjectIntoState) – aktuell ist
   // immer nur toolManager.historyStack.
-  window.__kartograph = { mapState, mapRenderer, toolManager };
+  window.__kartograph = { mapState, mapRenderer, toolManager, worldMapView, buildPrintPdf, computeScaleBar };
 }
 
 main().catch((err) => {

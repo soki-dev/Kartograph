@@ -2,8 +2,9 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' data: blob:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; connect-src 'self' data: blob:;" />
   <title>Kartograph</title>
+  <link rel="stylesheet" href="dist/vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -15,11 +16,13 @@
       </div>
       <div class="toolbar-actions">
         <button id="btn-new" data-i18n="toolbar.new">Neue Karte</button>
+        <button id="btn-worldmap" data-i18n="toolbar.worldMap">Weltkarte</button>
         <button id="btn-open" data-i18n="toolbar.open">Öffnen</button>
         <select id="recent-select" aria-label="Zuletzt geöffnet"></select>
         <button id="btn-save" data-i18n="toolbar.save">Speichern</button>
         <button id="btn-save-as" data-i18n="toolbar.saveAs">Speichern unter</button>
         <button id="btn-export-png" data-i18n="toolbar.exportPng">Als PNG exportieren</button>
+        <button id="btn-export-pdf" data-i18n="toolbar.exportPdf">Als PDF exportieren</button>
         <span class="toolbar-spacer"></span>
         <button id="btn-undo" title="Undo">↶</button>
         <button id="btn-redo" title="Redo">↷</button>
@@ -41,6 +44,9 @@
         <button class="tool-btn" data-tool="terrainBrush"><span class="tool-icon">⛰</span><span data-i18n="tools.terrainBrush"></span></button>
         <button class="tool-btn" data-tool="biomeBrush"><span class="tool-icon">🎨</span><span data-i18n="tools.biomeBrush"></span></button>
         <button class="tool-btn" data-tool="waterTool"><span class="tool-icon">〰</span><span data-i18n="tools.waterTool"></span></button>
+        <button class="tool-btn" data-tool="roadTool"><span class="tool-icon">🛣</span><span data-i18n="tools.roadTool"></span></button>
+        <button class="tool-btn" data-tool="regionTool"><span class="tool-icon">🏳</span><span data-i18n="tools.regionTool"></span></button>
+        <button class="tool-btn" data-tool="rulerTool"><span class="tool-icon">📏</span><span data-i18n="tools.rulerTool"></span></button>
         <button class="tool-btn" data-tool="symbolTool"><span class="tool-icon">📍</span><span data-i18n="tools.symbolTool"></span></button>
         <button class="tool-btn" data-tool="labelTool"><span class="tool-icon">🔤</span><span data-i18n="tools.labelTool"></span></button>
         <button class="tool-btn" data-tool="eraser"><span class="tool-icon">🧹</span><span data-i18n="tools.eraser"></span></button>
@@ -48,6 +54,10 @@
 
       <main class="canvas-area" id="canvas-mount">
         <div class="canvas-placeholder" id="canvas-placeholder" data-i18n="status.noMap"></div>
+        <div class="scale-bar" id="scale-bar" hidden>
+          <div class="scale-bar-line"></div>
+          <span class="scale-bar-label" id="scale-bar-label"></span>
+        </div>
       </main>
 
       <aside class="right-panel">
@@ -65,9 +75,26 @@
     <footer class="status-bar">
       <span id="status-text" data-i18n="status.noMap"></span>
       <span class="status-spacer"></span>
+      <span id="status-measure"></span>
       <span id="status-coords"></span>
       <span id="status-seed"></span>
     </footer>
+
+    <div id="worldmap-overlay" class="worldmap-overlay" hidden>
+      <div class="worldmap-header">
+        <input type="text" id="worldmap-search-input" data-i18n-placeholder="worldmap.searchPlaceholder" />
+        <button id="worldmap-search-btn" data-i18n="worldmap.search">Suchen</button>
+        <span class="toolbar-spacer"></span>
+        <label data-i18n="worldmap.mapSize"></label>
+        <input type="number" id="worldmap-width" value="512" min="128" max="1024" step="64" />
+        <button id="worldmap-import-btn" class="primary" data-i18n="worldmap.importRegion" disabled></button>
+        <button id="worldmap-close-btn" data-i18n="worldmap.close">Schließen</button>
+      </div>
+      <ul id="worldmap-search-results" class="worldmap-search-results" hidden></ul>
+      <div id="worldmap-map" class="worldmap-map"></div>
+      <p id="worldmap-hint" class="worldmap-hint" data-i18n="worldmap.hint"></p>
+      <div id="worldmap-progress" class="progress-bar worldmap-progress" hidden><div class="progress-fill"></div></div>
+    </div>
 
     <div id="new-map-dialog" class="modal-overlay" hidden>
       <div class="modal">
@@ -103,6 +130,10 @@
           <label data-i18n="dialog.newMap.seaLevel"></label>
           <input type="range" id="nm-sea-level" min="0.1" max="0.7" step="0.01" value="0.4" />
         </div>
+        <div class="field-row">
+          <label data-i18n="dialog.newMap.metersPerCell"></label>
+          <input type="number" id="nm-meters-per-cell" value="1000" min="1" max="100000" step="1" />
+        </div>
 
         <div id="nm-progress" class="progress-bar" hidden><div class="progress-fill"></div></div>
 
@@ -121,6 +152,67 @@
         <div class="modal-actions">
           <button id="text-prompt-cancel" data-i18n="dialog.newMap.cancel"></button>
           <button id="text-prompt-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="close-confirm-dialog" class="modal-overlay" hidden>
+      <div class="modal">
+        <h2 data-i18n="dialog.closeConfirm.title"></h2>
+        <p data-i18n="dialog.closeConfirm.message"></p>
+        <div class="modal-actions">
+          <button id="close-confirm-cancel" data-i18n="dialog.closeConfirm.cancel"></button>
+          <button id="close-confirm-discard" data-i18n="dialog.closeConfirm.discard"></button>
+          <button id="close-confirm-save" class="primary" data-i18n="dialog.closeConfirm.save"></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="region-prompt-dialog" class="modal-overlay" hidden>
+      <div class="modal">
+        <h2 data-i18n="dialog.regionPrompt.title"></h2>
+        <div class="field-row">
+          <label data-i18n="dialog.regionPrompt.name"></label>
+          <input type="text" id="region-prompt-input" />
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.regionPrompt.color"></label>
+          <div class="color-swatches" id="region-prompt-colors"></div>
+        </div>
+        <div class="modal-actions">
+          <button id="region-prompt-cancel" data-i18n="dialog.newMap.cancel"></button>
+          <button id="region-prompt-ok" class="primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="print-dialog" class="modal-overlay" hidden>
+      <div class="modal">
+        <h2 data-i18n="dialog.print.title"></h2>
+        <div class="field-row">
+          <label data-i18n="dialog.print.mapTitle"></label>
+          <input type="text" id="print-title" />
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.print.pageSize"></label>
+          <select id="print-page-size">
+            <option value="a4">A4</option>
+            <option value="letter">Letter</option>
+          </select>
+        </div>
+        <div class="field-row">
+          <label data-i18n="dialog.print.orientation"></label>
+          <select id="print-orientation">
+            <option value="landscape" data-i18n="dialog.print.landscape"></option>
+            <option value="portrait" data-i18n="dialog.print.portrait"></option>
+          </select>
+        </div>
+        <div class="field-row field-row-checkbox">
+          <label><input type="checkbox" id="print-include-legend" checked /> <span data-i18n="dialog.print.includeLegend"></span></label>
+        </div>
+        <div class="modal-actions">
+          <button id="print-cancel" data-i18n="dialog.newMap.cancel"></button>
+          <button id="print-export" class="primary" data-i18n="dialog.print.export"></button>
         </div>
       </div>
     </div>

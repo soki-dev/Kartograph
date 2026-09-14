@@ -62,17 +62,35 @@ export class MapRenderer {
     this.terrainSprite = new Sprite();
     this.world.addChild(this.terrainSprite);
 
+    this.regionsGraphics = new Graphics();
+    this.world.addChild(this.regionsGraphics);
+
     this.riversGraphics = new Graphics();
     this.world.addChild(this.riversGraphics);
 
+    this.roadsGraphics = new Graphics();
+    this.world.addChild(this.roadsGraphics);
+
+    this.buildingsGraphics = new Graphics();
+    this.world.addChild(this.buildingsGraphics);
+
     this.symbolsContainer = new Container();
     this.world.addChild(this.symbolsContainer);
+
+    this.placesContainer = new Container();
+    this.world.addChild(this.placesContainer);
 
     this.gridGraphics = new Graphics();
     this.world.addChild(this.gridGraphics);
 
     this.labelsContainer = new Container();
     this.world.addChild(this.labelsContainer);
+
+    // Ephemere Werkzeug-Vorschau (Lineal-Strich, im Bau befindliche
+    // Regions-Grenze) – gehört zu keiner Daten-Ebene, liegt daher immer
+    // ganz oben und wird nicht über das Ebenen-Panel gesteuert.
+    this.overlayGraphics = new Graphics();
+    this.world.addChild(this.overlayGraphics);
 
     this._bindPointerEvents();
     window.addEventListener('resize', () => this._onResize());
@@ -211,6 +229,56 @@ export class MapRenderer {
     }
   }
 
+  redrawRoads() {
+    const g = this.roadsGraphics;
+    g.clear();
+    for (const road of this.mapState.roads) {
+      const points = road.points;
+      if (points.length < 2) continue;
+      g.moveTo(points[0][0], points[0][1]);
+      for (let i = 1; i < points.length; i++) g.lineTo(points[i][0], points[i][1]);
+      g.stroke({ width: 1.2, color: 0x8a6a45, alpha: 0.85, cap: 'round', join: 'round' });
+    }
+  }
+
+  redrawBuildings() {
+    const g = this.buildingsGraphics;
+    g.clear();
+    for (const building of this.mapState.buildings) {
+      const points = building.points;
+      if (points.length < 3) continue;
+      g.poly(points.flat()).fill({ color: 0x9a8a6a, alpha: 0.8 }).stroke({ width: 0.5, color: 0x5c4f38 });
+    }
+  }
+
+  redrawRegions() {
+    const g = this.regionsGraphics;
+    g.clear();
+    for (const region of this.mapState.regions) {
+      const points = region.points;
+      if (points.length < 3) continue;
+      g.poly(points.flat()).fill({ color: region.color || 0xaa3355, alpha: 0.22 }).stroke({ width: 2, color: region.color || 0xaa3355, alpha: 0.6 });
+    }
+  }
+
+  redrawPlaces() {
+    this.placesContainer.removeChildren();
+    for (const place of this.mapState.places) {
+      if (!place.name) continue;
+      const text = new Text({
+        text: place.name,
+        style: { fontFamily: 'Arial, sans-serif', fontSize: 12, fill: 0xe7e3d8, stroke: { color: 0x1c1a16, width: 2.5 } }
+      });
+      text.anchor.set(0.5, -0.2);
+      text.position.set(place.x, place.y);
+      this.placesContainer.addChild(text);
+
+      const dot = new Graphics().circle(0, 0, 2.2).fill(0xe7e3d8);
+      dot.position.set(place.x, place.y);
+      this.placesContainer.addChild(dot);
+    }
+  }
+
   redrawSymbols() {
     this.symbolsContainer.removeChildren();
     for (const symbol of this.mapState.symbols) {
@@ -254,6 +322,34 @@ export class MapRenderer {
     g.stroke({ width: 1 / this.world.scale.x, color: 0xffffff, alpha: 0.15 });
   }
 
+  // --- Werkzeug-Vorschau (Lineal, im Bau befindliche Region) ---
+
+  clearOverlay() {
+    this.overlayGraphics.clear();
+  }
+
+  redrawRulerPreview(a, b) {
+    const g = this.overlayGraphics;
+    g.clear();
+    const lineWidth = 1.5 / this.world.scale.x;
+    const dotRadius = 3 / this.world.scale.x;
+    g.moveTo(a[0], a[1]).lineTo(b[0], b[1]).stroke({ width: lineWidth, color: 0xe8a856, alpha: 0.9 });
+    g.circle(a[0], a[1], dotRadius).fill(0xe8a856);
+    g.circle(b[0], b[1], dotRadius).fill(0xe8a856);
+  }
+
+  redrawRegionPreview(points) {
+    const g = this.overlayGraphics;
+    g.clear();
+    if (points.length === 0) return;
+    const lineWidth = 1.5 / this.world.scale.x;
+    const dotRadius = 3 / this.world.scale.x;
+    g.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i++) g.lineTo(points[i][0], points[i][1]);
+    g.stroke({ width: lineWidth, color: 0xaa3355, alpha: 0.9 });
+    for (const [x, y] of points) g.circle(x, y, dotRadius).fill(0xaa3355);
+  }
+
   applyLayerVisibility() {
     const byKey = Object.fromEntries(this.mapState.layers.map((l) => [l.key, l]));
     const apply = (obj, key) => {
@@ -263,16 +359,24 @@ export class MapRenderer {
       obj.alpha = layer.opacity;
     };
     apply(this.terrainSprite, 'terrain');
+    apply(this.regionsGraphics, 'regions');
     apply(this.riversGraphics, 'water');
+    apply(this.roadsGraphics, 'roads');
+    apply(this.buildingsGraphics, 'buildings');
     apply(this.symbolsContainer, 'symbols');
+    apply(this.placesContainer, 'places');
     apply(this.labelsContainer, 'labels');
     apply(this.gridGraphics, 'grid');
   }
 
   redrawAll() {
     this.redrawTerrain();
+    this.redrawRegions();
     this.redrawRivers();
+    this.redrawRoads();
+    this.redrawBuildings();
     this.redrawSymbols();
+    this.redrawPlaces();
     this.redrawLabels();
     this.redrawGrid();
     this.applyLayerVisibility();
